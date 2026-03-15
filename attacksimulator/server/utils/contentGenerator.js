@@ -98,7 +98,18 @@ ${trackingUrl}
 
 
 
+// Channel → default attack type (for manual channel selection from UI)
+const CHANNEL_TO_ATTACK_TYPE = {
+  email: 'email_phishing',
+  sms: 'social_engineering',
+  whatsapp: 'social_engineering',
+  voice: 'voice_phishing',
+  telegram: 'credential_harvesting'
+}
+
 module.exports = {
   selectDelivery,
-  buildContent
+  buildContent,
+  CHANNEL_MATRIX,
+  CHANNEL_TO_ATTACK_TYPE
 }

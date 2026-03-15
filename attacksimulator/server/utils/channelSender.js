@@ -1,10 +1,24 @@
-const { Resend } = require('resend')
-const resend = new Resend(process.env.RESEND_API_KEY || 're_dummy_key_to_prevent_crash_123')
+const nodemailer = require('nodemailer')
+
+let transporter = null
+function getTransporter() {
+  if (transporter) return transporter
+  transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: parseInt(process.env.SMTP_PORT) || 587,
+    secure: false,
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS
+    }
+  })
+  return transporter
+}
 
 const twilio = require('twilio')
 const axios = require('axios')
 
-const { buildContent, selectDelivery } = require('./contentGenerator')
+const { buildContent, selectDelivery, CHANNEL_TO_ATTACK_TYPE } = require('./contentGenerator')
 
 const fs = require('fs/promises')
 const path = require('path')
@@ -31,9 +45,9 @@ function getTwilioClient() {
 async function sendEmailResend({ to, subject, html }) {
 
   try {
-
-    await resend.emails.send({
-      from: process.env.EMAIL_FROM || 'onboarding@resend.dev',
+    const transport = getTransporter()
+    await transport.sendMail({
+      from: process.env.SMTP_FROM || `"IT Security" <${process.env.SMTP_USER}>`,
       to,
       subject,
       html
@@ -68,9 +82,9 @@ async function sendEmailWithPDF({
 }) {
 
   try {
-
-    await resend.emails.send({
-      from: process.env.EMAIL_FROM || 'onboarding@resend.dev',
+    const transport = getTransporter()
+    await transport.sendMail({
+      from: process.env.SMTP_FROM || `"IT Security" <${process.env.SMTP_USER}>`,
       to,
       subject,
       html: `
@@ -426,7 +440,11 @@ async function dispatchAttack({
   trackingUrl,
   orgName,
   managerName = 'IT Security',
-  aggressionLevel = 1
+  aggressionLevel = 1,
+  channel: forceChannel = null,
+  customSubject = null,
+  customMessage = null,
+  template = null
 }) {
 
   const results = []
@@ -437,8 +455,19 @@ async function dispatchAttack({
 
   const archetype = employee.behavioralArchetype || 'unknown'
 
-  const { channel, contentType } =
-    selectDelivery({ attackType, archetype, aggressionLevel })
+  const resolvedAttackType = forceChannel
+    ? (CHANNEL_TO_ATTACK_TYPE[forceChannel] || attackType)
+    : attackType
+
+  let channel, contentType
+  if (forceChannel) {
+    channel = forceChannel
+    contentType = resolvedAttackType === 'malware_simulation' ? 'pdf' : 'text'
+  } else {
+    const delivery = selectDelivery({ attackType: resolvedAttackType, archetype, aggressionLevel })
+    channel = delivery.channel
+    contentType = delivery.contentType
+  }
 
   let content = null
 
@@ -460,11 +489,17 @@ async function dispatchAttack({
   //
   if (channel === 'email' && email) {
 
+    const subject = customSubject || 'Security Alert'
+    const defaultHtml = `<p>Hello ${employee.displayName}</p>
+        <p>Please verify your account:</p>
+        <a href="${trackingUrl}">${trackingUrl}</a>`
+    const html = customMessage ? `<p>${customMessage.replace(/\n/g, '</p><p>')}</p><p><a href="${trackingUrl}">${trackingUrl}</a></p>` : defaultHtml
+
     if (content?.buffer) {
 
       results.push(await sendEmailWithPDF({
         to: email,
-        subject: 'Important Document',
+        subject: customSubject || 'Important Document',
         employeeName: employee.displayName,
         orgName,
         pdfBuffer: content.buffer,
@@ -476,10 +511,8 @@ async function dispatchAttack({
 
       results.push(await sendEmailResend({
         to: email,
-        subject: 'Security Alert',
-        html: `<p>Hello ${employee.displayName}</p>
-        <p>Please verify your account:</p>
-        <a href="${trackingUrl}">${trackingUrl}</a>`
+        subject,
+        html
       }))
 
     }
@@ -491,9 +524,10 @@ async function dispatchAttack({
   //
   else if (channel === 'sms' && phone) {
 
+    const message = customMessage || `Security verification required: ${trackingUrl}`
     results.push(await sendSMS({
       to: phone,
-      message: `Security verification required: ${trackingUrl}`
+      message
     }))
 
   }
@@ -513,9 +547,10 @@ async function dispatchAttack({
 
     } else {
 
+      const message = customMessage || `Security alert: ${trackingUrl}`
       results.push(await sendWhatsAppText({
         to: phone,
-        message: `Security alert: ${trackingUrl}`
+        message
       }))
 
     }
@@ -548,9 +583,10 @@ async function dispatchAttack({
 
     else {
 
+      const message = customMessage || `Security verification required: ${trackingUrl}`
       results.push(await sendTelegram({
         to: telegramId,
-        message: `Security verification required: ${trackingUrl}`
+        message
       }))
 
     }
